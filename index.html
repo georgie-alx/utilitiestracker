@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Utility Bills Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --card-bg: #ffffff;
+    --text: #1a1d23;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --accent-electricity: #f59e0b;
+    --accent-gas: #ef4444;
+    --accent-water: #3b82f6;
+    --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115;
+      --card-bg: #1a1d23;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --border: #2a2e37;
+      --shadow: 0 1px 3px rgba(0,0,0,0.4);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 24px 16px 60px;
+  }
+  .wrap {
+    max-width: 1000px;
+    margin: 0 auto;
+  }
+  header {
+    margin-bottom: 24px;
+  }
+  h1 {
+    font-size: 1.6rem;
+    margin: 0 0 4px;
+  }
+  .subtitle {
+    color: var(--muted);
+    font-size: 0.95rem;
+  }
+  .status {
+    padding: 12px 16px;
+    border-radius: 10px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    margin-bottom: 20px;
+    font-size: 0.9rem;
+    color: var(--muted);
+  }
+  .status.error {
+    color: #b91c1c;
+    border-color: #fca5a5;
+  }
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .summary-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    box-shadow: var(--shadow);
+  }
+  .summary-card .label {
+    font-size: 0.78rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .summary-card .value {
+    font-size: 1.4rem;
+    font-weight: 600;
+    margin-top: 4px;
+  }
+  .summary-card.electricity .value { color: var(--accent-electricity); }
+  .summary-card.gas .value { color: var(--accent-gas); }
+  .summary-card.water .value { color: var(--accent-water); }
+
+  .chart-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: var(--shadow);
+  }
+  .chart-card h2 {
+    font-size: 1.05rem;
+    margin: 0 0 12px;
+  }
+  .chart-container {
+    position: relative;
+    width: 100%;
+    height: 280px;
+  }
+  .combined-container {
+    position: relative;
+    width: 100%;
+    height: 340px;
+  }
+  footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.8rem;
+    margin-top: 30px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Utility Bills Dashboard</h1>
+    <div class="subtitle">Electricity, Gas &amp; Water trends, pulled live from Google Sheets</div>
+  </header>
+
+  <div id="status" class="status">Loading data from Google Sheet…</div>
+
+  <div class="summary-grid" id="summaryGrid" style="display:none;">
+    <div class="summary-card electricity">
+      <div class="label">Latest Electricity</div>
+      <div class="value" id="latestElectricity">–</div>
+    </div>
+    <div class="summary-card gas">
+      <div class="label">Latest Gas</div>
+      <div class="value" id="latestGas">–</div>
+    </div>
+    <div class="summary-card water">
+      <div class="label">Latest Water</div>
+      <div class="value" id="latestWater">–</div>
+    </div>
+  </div>
+
+  <div class="chart-card">
+    <h2>Combined Trend</h2>
+    <div class="combined-container">
+      <canvas id="combinedChart"></canvas>
+    </div>
+  </div>
+
+  <div class="chart-card">
+    <h2>Electricity</h2>
+    <div class="chart-container">
+      <canvas id="electricityChart"></canvas>
+    </div>
+  </div>
+
+  <div class="chart-card">
+    <h2>Gas</h2>
+    <div class="chart-container">
+      <canvas id="gasChart"></canvas>
+    </div>
+  </div>
+
+  <div class="chart-card">
+    <h2>Water</h2>
+    <div class="chart-container">
+      <canvas id="waterChart"></canvas>
+    </div>
+  </div>
+
+  <footer>Data source: Google Sheets (published CSV) · Updates automatically whenever the sheet changes</footer>
+</div>
+
+<script>
+/* ======================================================================
+   SETUP — read this before deploying
+   ======================================================================
+   1. In Google Sheets: File > Share > Publish to web
+      - Select "Sheet1" (not "Entire document")
+      - Choose "Comma-separated values (.csv)"
+      - Click Publish, copy the URL it gives you
+   2. Paste that URL below as SHEET_CSV_URL.
+      It will look like:
+      https://docs.google.com/spreadsheets/d/e/2PACX-XXXXXXX/pub?output=csv
+
+      Alternative (no "publish to web" needed, sheet just needs to be
+      "Anyone with the link can view"): use the gviz endpoint instead,
+      replacing YOUR_SHEET_ID with the long ID from your sheet's URL:
+      https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/gviz/tq?tqx=out:csv&sheet=Sheet1
+   ====================================================================== */
+
+const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR-2ARaMZxO1yQv4rUKdCmVvjfBUkrF2FeZAw53MedSvliuibqLBJLpWsYPHPUFaTWXHdfX5GgrKX94/pub?gid=0&single=true&output=csv";
+
+const statusEl = document.getElementById('status');
+
+function showError(msg) {
+  statusEl.textContent = msg;
+  statusEl.classList.add('error');
+}
+
+function parseNumber(val) {
+  if (val === undefined || val === null) return null;
+  const cleaned = String(val).replace(/[^0-9.\-]/g, '');
+  if (cleaned === '' || cleaned === '-') return null;
+  const n = parseFloat(cleaned);
+  return isNaN(n) ? null : n;
+}
+
+function isDark() {
+  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
+function chartTextColor() {
+  return isDark() ? '#e5e7eb' : '#1a1d23';
+}
+function chartGridColor() {
+  return isDark() ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
+}
+
+async function loadData() {
+  if (!SHEET_CSV_URL || SHEET_CSV_URL.indexOf('PASTE_YOUR') !== -1) {
+    showError('Set SHEET_CSV_URL in the script to your published Google Sheet CSV link (see setup comment at the top of the script).');
+    return;
+  }
+
+  try {
+    const res = await fetch(SHEET_CSV_URL + (SHEET_CSV_URL.includes('?') ? '&' : '?') + 'cachebust=' + Date.now());
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const csvText = await res.text();
+
+    const parsed = Papa.parse(csvText, { header: true, skipEmptyLines: true });
+    const rows = parsed.data.filter(r => r.Month && r.Month.trim() !== '');
+
+    if (rows.length === 0) {
+      showError('No rows found. Check that Sheet1 has a header row and data below it.');
+      return;
+    }
+
+    const months = rows.map(r => r.Month);
+    const electricity = rows.map(r => parseNumber(r.Electricity));
+    const gas = rows.map(r => parseNumber(r.Gas));
+    const water = rows.map(r => parseNumber(r.Water));
+
+    statusEl.style.display = 'none';
+    document.getElementById('summaryGrid').style.display = 'grid';
+
+    const fmt = n => (n === null || n === undefined) ? '–' : n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const lastIdx = (arr) => {
+      for (let i = arr.length - 1; i >= 0; i--) if (arr[i] !== null) return i;
+      return -1;
+    };
+    const eIdx = lastIdx(electricity), gIdx = lastIdx(gas), wIdx = lastIdx(water);
+    document.getElementById('latestElectricity').textContent = eIdx >= 0 ? fmt(electricity[eIdx]) : '–';
+    document.getElementById('latestGas').textContent = gIdx >= 0 ? fmt(gas[gIdx]) : '–';
+    document.getElementById('latestWater').textContent = wIdx >= 0 ? fmt(water[wIdx]) : '–';
+
+    renderCharts(months, electricity, gas, water);
+  } catch (err) {
+    console.error(err);
+    showError('Could not load the sheet. Make sure it is published to the web / shared as "Anyone with the link can view", and that the URL is correct. (' + err.message + ')');
+  }
+}
+
+function baseOptions(yLabel) {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { labels: { color: chartTextColor() } },
+      tooltip: { mode: 'index', intersect: false }
+    },
+    scales: {
+      x: {
+        ticks: { color: chartTextColor() },
+        grid: { color: chartGridColor() }
+      },
+      y: {
+        beginAtZero: true,
+        title: { display: !!yLabel, text: yLabel, color: chartTextColor() },
+        ticks: { color: chartTextColor() },
+        grid: { color: chartGridColor() }
+      }
+    }
+  };
+}
+
+function renderCharts(months, electricity, gas, water) {
+  new Chart(document.getElementById('combinedChart'), {
+    type: 'line',
+    data: {
+      labels: months,
+      datasets: [
+        { label: 'Electricity', data: electricity, borderColor: '#f59e0b', backgroundColor: '#f59e0b33', tension: 0.3, spanGaps: true },
+        { label: 'Gas', data: gas, borderColor: '#ef4444', backgroundColor: '#ef444433', tension: 0.3, spanGaps: true },
+        { label: 'Water', data: water, borderColor: '#3b82f6', backgroundColor: '#3b82f633', tension: 0.3, spanGaps: true }
+      ]
+    },
+    options: baseOptions('Amount')
+  });
+
+  new Chart(document.getElementById('electricityChart'), {
+    type: 'line',
+    data: {
+      labels: months,
+      datasets: [{ label: 'Electricity', data: electricity, borderColor: '#f59e0b', backgroundColor: '#f59e0b33', fill: true, tension: 0.3, spanGaps: true }]
+    },
+    options: baseOptions('Amount')
+  });
+
+  new Chart(document.getElementById('gasChart'), {
+    type: 'line',
+    data: {
+      labels: months,
+      datasets: [{ label: 'Gas', data: gas, borderColor: '#ef4444', backgroundColor: '#ef444433', fill: true, tension: 0.3, spanGaps: true }]
+    },
+    options: baseOptions('Amount')
+  });
+
+  new Chart(document.getElementById('waterChart'), {
+    type: 'line',
+    data: {
+      labels: months,
+      datasets: [{ label: 'Water', data: water, borderColor: '#3b82f6', backgroundColor: '#3b82f633', fill: true, tension: 0.3, spanGaps: true }]
+    },
+    options: baseOptions('Amount')
+  });
+}
+
+loadData();
+</script>
+</body>
+</html>
